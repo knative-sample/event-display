@@ -37,6 +37,7 @@ Data,
 */
 
 func display(event cloudevents.Event) {
+	fmt.Printf("Hello World: \n")
 	fmt.Printf("cloudevents.Event\n%s", event.String())
 }
 
