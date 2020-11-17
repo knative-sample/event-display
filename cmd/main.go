@@ -1,50 +1,84 @@
 package main
-
 import (
-	"context"
+"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go"
-	"github.com/knative-sample/event-display/pkg/kncloudevents"
+"github.com/google/uuid"
 )
+// HelloWorld defines the Data of CloudEvent with type=dev.knative.samples.helloworld
+type HelloWorld struct {
+	// Msg holds the message from the event
+	Msg string `json:"msg,omitempty"`
+}
 
-/*
-Example Output:
+// HiFromKnative defines the Data of CloudEvent with type=dev.knative.samples.hifromknative
+type HiFromKnative struct {
+	// Msg holds the message from the event
+	Msg string `json:"msg,omitempty"`
+}
+type eventData struct {
+	Message string `json:"message,omitempty,string"`
+}
 
-☁  cloudevents.Event:
-Validation: valid
-Context Attributes,
-  SpecVersion: 0.2
-  Type: dev.knative.eventing.samples.heartbeat
-  Source: https://github.com/knative/eventing-sources/cmd/heartbeats/#local/demo
-  ID: 3d2b5a1f-10ca-437b-a374-9c49e43c02fb
-  Time: 2019-03-14T21:21:29.366002Z
-  ContentType: application/json
-  Extensions:
-    the: 42
-    beats: true
-    heart: yes
-Transport Context,
-  URI: /
-  Host: localhost:8080
-  Method: POST
-Data,
-  {
-    "id":162,
-    "label":""
-  }
-*/
+var wait  = 15
+func receive(ctx context.Context, event cloudevents.Event, response *cloudevents.EventResponse) error {
+	// Here is where your code to process the event will go.
+	// In this example we will log the event msg
+	log.Printf("Event Context: %+v\n", event.Context)
+	log.Printf("start to wait: %v s\n", wait)
+	time.Sleep(time.Duration(wait) * time.Second)
+	data := &HelloWorld{}
+	if err := event.DataAs(data); err != nil {
+		log.Printf("Error while extracting cloudevent Data: %s\n", err.Error())
+		return err
+	}
+	log.Printf("Hello World Message %q", data.Msg)
 
-func display(event cloudevents.Event) {
-	fmt.Printf("Hello World: \n")
-	fmt.Printf("cloudevents.Event\n%s", event.String())
+	// Respond with another event (optional)
+	// This is optional and is intended to show how to respond back with another event after processing.
+	// The response will go back into the knative eventing system just like any other event
+	newEvent := cloudevents.NewEvent()
+	newEvent.SetID(uuid.New().String())
+	newEvent.SetSource("knative/eventing/samples/hello-world")
+	newEvent.SetType("dev.knative.samples.hifromknative")
+	newEvent.SetData(HiFromKnative{Msg: "Hi from Knative!"})
+	response.RespondWith(200, &newEvent)
+
+	log.Printf("Responded with event %v", newEvent)
+
+	return nil
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	log.Print("Hello world received a request.")
+	target := os.Getenv("TARGET")
+	if target == "" {
+		target = "World"
+	}
+	fmt.Fprintf(w, "Hello %s!\n", target)
 }
 
 func main() {
-	c, err := kncloudevents.NewDefaultClient()
-	if err != nil {
-		log.Fatal("Failed to create client, ", err)
+	log.Print("Hello world sample started.")
+	waitParam := os.Getenv("wait")
+	if waitParam == "" {
+		wait = 15
+	} else {
+		waitT, err := strconv.Atoi(waitParam)
+		if err != nil {
+			log.Fatalf("wait param error, %v", err)
+		}
+		wait = waitT
 	}
-	log.Fatal(c.StartReceiver(context.Background(), display))
+	c, err := cloudevents.NewDefaultClient()
+	if err != nil {
+		log.Fatalf("failed to create client, %v", err)
+	}
+	log.Fatal(c.StartReceiver(context.Background(), receive))
 }
