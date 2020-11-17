@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.10.3 as builder
+FROM registry.cn-hangzhou.aliyuncs.com/knative-sample/golang:1.13-alpine3.10 as builder
 
 # Copy in the go src
 WORKDIR /go/src/github.com/knative-sample/event-display
