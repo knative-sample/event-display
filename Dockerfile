@@ -13,5 +13,5 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o event-display github.co
 # Copy the event-display into a thin image
 FROM alpine:3.7
 WORKDIR /
-COPY --from=builder /go/src/github.com/knative-sample/event-display/cmd app/
+COPY --from=builder /go/src/github.com/knative-sample/event-display/event-display app/
 ENTRYPOINT ["/app/event-display"]
