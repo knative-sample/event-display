@@ -2,68 +2,91 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	cloudevents "github.com/cloudevents/sdk-go"
+	"github.com/google/uuid"
 	"log"
 	"net/http"
-	"os"
-	"strconv"
+	"strings"
+	"sync"
 	"time"
-
-	cloudevents "github.com/cloudevents/sdk-go"
 )
 
-// HelloWorld defines the Data of CloudEvent with type=dev.knative.samples.helloworld
-type HelloWorld struct {
-	// Msg holds the message from the event
-	Msg string `json:"msg,omitempty"`
+const (
+	SysError = "Internal Service Error"
+)
+
+type EventData struct {
+	TemplateName string `json:"template_name"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	ID           int64  `json:"id"`
 }
 
-// HiFromKnative defines the Data of CloudEvent with type=dev.knative.samples.hifromknative
-type HiFromKnative struct {
-	// Msg holds the message from the event
-	Msg string `json:"msg,omitempty"`
-}
-type eventData struct {
-	Message string `json:"message,omitempty,string"`
-}
+var (
+	processLocker = sync.Mutex{}
+	processing    = ""
+)
 
-var wait = 15
-
-func receive(ctx context.Context, event cloudevents.Event, response *cloudevents.EventResponse) error {
-	// Here is where your code to process the event will go.
-	// In this example we will log the event msg
-	log.Printf("Event Context: %+v\n", event.Context)
-	log.Printf("start to wait: %v s\n", wait)
-	time.Sleep(time.Duration(wait) * time.Second)
-	fmt.Printf("☁️  cloudevents.Event\n%s", event.String())
-
+func processEvent(ctx context.Context, event cloudevents.Event, response *cloudevents.EventResponse, ret chan struct{}) error {
+	time.Sleep(time.Second * 10)
+	ret <- struct{}{}
 	return nil
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	log.Print("Hello world received a request.")
-	target := os.Getenv("TARGET")
-	if target == "" {
-		target = "World"
+func Handler(ctx context.Context, event cloudevents.Event, response *cloudevents.EventResponse) error {
+	eventStr := event.String()
+	log.Printf("receive cloudevents.Event: ", strings.Replace(eventStr, "\n", " ", -1))
+	var task EventData
+	rawData, ok := event.Data.([]byte)
+	if !ok {
+		log.Print("get event data error, raw data: ", event.Data)
+		response.RespondWith(400, &event)
+		return errors.New(SysError)
 	}
-	fmt.Fprintf(w, "Hello %s!\n", target)
+	if err := json.Unmarshal(rawData, &task); err != nil {
+		log.Print("unmarshal event error: ", err)
+		response.RespondWith(400, &event)
+		return errors.New(SysError)
+	}
+	uid, _ := uuid.NewUUID()
+	lockerVal := fmt.Sprintf("%v/%s", event.ID(), uid.String())
+	processLocker.Lock()
+	if processing != "" {
+		processLocker.Unlock()
+		log.Printf("service is running another task now, so current task[%d] failed", task.ID)
+		response.RespondWith(http.StatusPreconditionFailed, &event)
+	}
+	processing = lockerVal
+	processLocker.Unlock()
+
+	retChan := make(chan struct{})
+	go processEvent(ctx, event, response, retChan)
+	timeout := time.After(time.Second * 15)
+	select {
+	case <-timeout:
+		// TODO
+	case <-ctx.Done():
+		// TODO
+	case <-retChan:
+		// TODO
+	}
+	processLocker.Lock()
+	if processing == lockerVal {
+		processing = ""
+	}
+	processLocker.Unlock()
+	response.RespondWith(200, &event)
+	return nil
 }
 
 func main() {
 	log.Print("Hello world sample started.")
-	waitParam := os.Getenv("wait")
-	if waitParam == "" {
-		wait = 15
-	} else {
-		waitT, err := strconv.Atoi(waitParam)
-		if err != nil {
-			log.Fatalf("wait param error, %v", err)
-		}
-		wait = waitT
-	}
 	c, err := cloudevents.NewDefaultClient()
 	if err != nil {
 		log.Fatalf("failed to create client, %v", err)
 	}
-	log.Fatal(c.StartReceiver(context.Background(), receive))
+	log.Fatal(c.StartReceiver(context.Background(), Handler))
 }
